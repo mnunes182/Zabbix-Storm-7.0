@@ -102,18 +102,15 @@ if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
   status
 
   log "${YELLOW}📦 Instalando PostgreSQL, Zabbix e dependências...${NC}"
-  apt install -y postgresql postgresql-contrib zabbix-server-pgsql zabbix-frontend-php php8.2-pgsql zabbix-apache-conf zabbix-sql-scripts zabbix-agent2 &>>"$LOGFILE"
+  apt install -y postgresql postgresql-contrib zabbix-server-pgsql zabbix-frontend-php php-pgsql zabbix-apache-conf zabbix-sql-scripts zabbix-agent2 &>>"$LOGFILE"
   status
 
-  log "${YELLOW}📦 Instalando plugins do Zabbix Agent 2...${NC}"
-  apt install -y zabbix-agent2-plugin-mongodb zabbix-agent2-plugin-mssql zabbix-agent2-plugin-postgresql &>>"$LOGFILE"
-  status
-
+  # Inicializa e garante start do PostgreSQL
   systemctl enable --now postgresql &>>"$LOGFILE"
 
   log "${YELLOW}📦 Criando usuário e banco PostgreSQL para o Zabbix...${NC}"
-  sudo -u postgres createuser --pwprompt ${ZABBIX_DB_USER}
-  sudo -u postgres createdb -O ${ZABBIX_DB_USER} ${ZABBIX_DB_NAME}
+  sudo -u postgres psql -c "CREATE USER ${ZABBIX_DB_USER} WITH PASSWORD '${ZABBIX_DB_PASS}';" &>>"$LOGFILE"
+  sudo -u postgres psql -c "CREATE DATABASE ${ZABBIX_DB_NAME} OWNER ${ZABBIX_DB_USER} ENCODING 'UTF8' LC_COLLATE='C' LC_CTYPE='C' TEMPLATE=template0;" &>>"$LOGFILE"
   status
 
   log "${YELLOW}📦 Importando schema inicial do Zabbix (PostgreSQL)...${NC}"
@@ -122,8 +119,8 @@ if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
 
   log "${YELLOW}📦 Configurando o servidor Zabbix...${NC}"
   if [ -f /etc/zabbix/zabbix_server.conf ]; then
-    sed -i '/^DBPassword=/d' /etc/zabbix/zabbix_server.conf
-    echo "DBPassword=${ZABBIX_DB_PASS}" >> /etc/zabbix/zabbix_server.conf
+    sed -i "s|^# DBPassword=.*|DBPassword=${ZABBIX_DB_PASS}|" /etc/zabbix/zabbix_server.conf
+    grep -q "^DBPassword=" /etc/zabbix/zabbix_server.conf || echo "DBPassword=${ZABBIX_DB_PASS}" >> /etc/zabbix/zabbix_server.conf
     status
   else
     log "${RED}❌ Falhou (arquivo de conf não encontrado)${NC}\n"
@@ -144,8 +141,8 @@ if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
   status
 
   log "${YELLOW}🔁 Ativando e iniciando serviços...${NC}"
-  systemctl restart zabbix-server zabbix-agent2 apache2 grafana-server &>>"$LOGFILE"
-  systemctl enable zabbix-server zabbix-agent2 apache2 grafana-server &>>"$LOGFILE"
+  systemctl restart zabbix-server zabbix-agent apache2 grafana-server &>>"$LOGFILE"
+  systemctl enable zabbix-server zabbix-agent apache2 grafana-server &>>"$LOGFILE"
   status
 
 # ================================
