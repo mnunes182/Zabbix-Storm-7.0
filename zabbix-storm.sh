@@ -95,14 +95,14 @@ log "${NC}\n:: Iniciando instalação do Zabbix, PostgreSQL e Grafana... Aguarde
 if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
 
   log "${YELLOW}📥 Baixando e configurando repositório do Zabbix...${NC}"
-  wget -q "https://repo.zabbix.com/zabbix/${ZABBIX_VERSION}/$DISTRO/pool/main/z/zabbix-release/zabbix-release_latest_${ZABBIX_VERSION}+${DISTRO}${VERSION_ID}_all.deb" \
+  wget -4 -q "https://repo.zabbix.com/zabbix/${ZABBIX_VERSION}/$DISTRO/pool/main/z/zabbix-release/zabbix-release_latest_${ZABBIX_VERSION}+${DISTRO}${VERSION_ID}_all.deb" \
     -O "zabbix-release_latest_${ZABBIX_VERSION}+${DISTRO}${VERSION_ID}_all.deb"
   dpkg -i "zabbix-release_latest_${ZABBIX_VERSION}+${DISTRO}${VERSION_ID}_all.deb" &>>"$LOGFILE"
   apt update -qq &>>"$LOGFILE"
   status
 
   log "${YELLOW}📦 Instalando PostgreSQL, Zabbix e dependências...${NC}"
-  apt install -y postgresql postgresql-contrib zabbix-server-pgsql zabbix-frontend-php php-pgsql zabbix-apache-conf zabbix-sql-scripts zabbix-agent &>>"$LOGFILE"
+  apt install -y postgresql postgresql-contrib zabbix-server-pgsql zabbix-frontend-php php-pgsql zabbix-apache-conf zabbix-sql-scripts zabbix-agent2 &>>"$LOGFILE"
   status
 
   # Inicializa e garante start do PostgreSQL
