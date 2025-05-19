@@ -1,19 +1,17 @@
 #!/bin/bash
 
 ##########################################################
-# Instalação automática Zabbix + MySQL + Grafana Ubuntu
-# Autor: BUG IT (Aprimorado por ChatGPT)
-# Compatível: Ubuntu 24.04
+# Instalação Zabbix + Banco + Grafana — Multiplataforma
+# Autor: BUG IT / Fork mnunes182
 ##########################################################
 
 # ================================
 # --- PARÂMETROS EDITÁVEIS AQUI ---
 # ================================
 ZABBIX_VERSION="7.0"
-UBUNTU_VERSION="24.04"
 ZABBIX_DB_NAME="zabbix"
 ZABBIX_DB_USER="zabbix"
-ZABBIX_DB_PASS="${ZABBIX_DB_PASS:-}"  # Se quiser passar por env, use: export ZABBIX_DB_PASS=suasenha
+ZABBIX_DB_PASS="${ZABBIX_DB_PASS:-}"  # Pode exportar no shell antes de rodar
 GRAFANA_PORT=3000
 LOCALE="pt_BR.UTF-8"
 LOGFILE="/var/log/instalador_zabbix.log"
@@ -45,21 +43,22 @@ log() {
 # --- CHECAGENS DE PRÉ-REQUISITO
 # ===============================
 
-# Root
 if [[ "$EUID" -ne 0 ]]; then
   echo -e "${RED}❌ Este script precisa ser executado como root!${NC}"
   exit 1
 fi
 
-# Ubuntu correto
-if ! grep -q "VERSION=\"${UBUNTU_VERSION}\"" /etc/os-release; then
-  echo -e "${YELLOW}⚠️  Este script foi testado apenas no Ubuntu ${UBUNTU_VERSION}${NC}"
-  echo -e "${YELLOW}    Se prosseguir, pode não funcionar!${NC}"
-  read -p "Deseja continuar mesmo assim? (s/n): " resp
-  [[ "$resp" =~ ^[Ss] ]] || exit 1
+# Detecta distribuição
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    DISTRO=$ID
+    VERSAO=$VERSION_ID
+else
+    echo "Distribuição não identificada!"
+    exit 1
 fi
 
-# Senha segura para o banco
+# Pede senha se não foi passada
 if [ -z "$ZABBIX_DB_PASS" ]; then
   read -s -p "Digite uma senha segura para o banco do Zabbix: " ZABBIX_DB_PASS
   echo
@@ -69,12 +68,11 @@ if [ -z "$ZABBIX_DB_PASS" ]; then
   fi
 fi
 
-# Limpa tela e arquivo de log
 clear
 echo "" > "$LOGFILE"
 
 # ================================
-# --- BANNER E INÍCIO ---
+# --- BANNER ---
 # ================================
 echo -e "${RED}"
 cat << "EOF"
@@ -87,91 +85,142 @@ cat << "EOF"
  ######   ##  ##   #####    #####     ####    ##  ##             ####      ##      ####    ##  ##   ##   ##
 EOF
 echo -e "${NC}"
-log "${NC}\n:: Iniciando instalação do MySQL + Zabbix + Grafana... Aguarde...\n"
+log "${NC}\n:: Iniciando instalação do Zabbix, Banco e Grafana... Aguarde...\n"
 
 # ================================
-# --- REPOSITÓRIO ZABBIX ---
+# --- INSTALAÇÃO UBUNTU/DEBIAN ---
 # ================================
-log "${YELLOW}📥 Baixando e configurando repositório do Zabbix...${NC}"
-wget -q "https://repo.zabbix.com/zabbix/${ZABBIX_VERSION}/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_${ZABBIX_VERSION}+ubuntu${UBUNTU_VERSION}_all.deb" \
-  -O "zabbix-release_latest_${ZABBIX_VERSION}+ubuntu${UBUNTU_VERSION}_all.deb"
-dpkg -i "zabbix-release_latest_${ZABBIX_VERSION}+ubuntu${UBUNTU_VERSION}_all.deb" &>>"$LOGFILE"
-apt update -qq &>>"$LOGFILE"
-status
+if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
 
-# ================================
-# --- INSTALA PACOTES ZABBIX ---
-# ================================
-log "${YELLOW}📦 Instalando pacotes Zabbix...${NC}"
-apt install -y zabbix-server-mysql zabbix-frontend-php zabbix-apache-conf zabbix-sql-scripts zabbix-agent &>>"$LOGFILE"
-status
+  log "${YELLOW}📥 Baixando e configurando repositório do Zabbix...${NC}"
+  wget -q "https://repo.zabbix.com/zabbix/${ZABBIX_VERSION}/$DISTRO/pool/main/z/zabbix-release/zabbix-release_latest_${ZABBIX_VERSION}+${DISTRO}${VERSION_ID}_all.deb" \
+    -O "zabbix-release_latest_${ZABBIX_VERSION}+${DISTRO}${VERSION_ID}_all.deb"
+  dpkg -i "zabbix-release_latest_${ZABBIX_VERSION}+${DISTRO}${VERSION_ID}_all.deb" &>>"$LOGFILE"
+  apt update -qq &>>"$LOGFILE"
+  status
 
-# ================================
-# --- INSTALA MYSQL ---
-# ================================
-log "${YELLOW}📦 Instalando MySQL Server...${NC}"
-apt install -y mysql-server &>>"$LOGFILE"
-status
+  log "${YELLOW}📦 Instalando pacotes Zabbix...${NC}"
+  apt install -y zabbix-server-mysql zabbix-frontend-php zabbix-apache-conf zabbix-sql-scripts zabbix-agent &>>"$LOGFILE"
+  status
 
-# ================================
-# --- CRIAÇÃO DO BANCO ZABBIX ---
-# ================================
-log "${YELLOW}📦 Criando banco de dados Zabbix...${NC}"
-mysql -u root <<EOF &>>"$LOGFILE"
+  log "${YELLOW}📦 Instalando MySQL Server...${NC}"
+  apt install -y mysql-server &>>"$LOGFILE"
+  status
+
+  log "${YELLOW}📦 Criando banco de dados Zabbix...${NC}"
+  mysql -u root <<EOF &>>"$LOGFILE"
 CREATE DATABASE IF NOT EXISTS ${ZABBIX_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 CREATE USER IF NOT EXISTS '${ZABBIX_DB_USER}'@'localhost' IDENTIFIED BY '${ZABBIX_DB_PASS}';
 GRANT ALL PRIVILEGES ON ${ZABBIX_DB_NAME}.* TO '${ZABBIX_DB_USER}'@'localhost';
 SET GLOBAL log_bin_trust_function_creators = 1;
 EOF
-status
-
-# Importa schema Zabbix (correção do -p)
-log "${YELLOW}📦 Importando schema inicial...${NC}"
-zcat /usr/share/zabbix/sql-scripts/mysql/server.sql.gz | \
-  mysql --default-character-set=utf8mb4 -u"${ZABBIX_DB_USER}" -p"${ZABBIX_DB_PASS}" "${ZABBIX_DB_NAME}" &>>"$LOGFILE"
-mysql -u root -e "SET GLOBAL log_bin_trust_function_creators = 0;" &>>"$LOGFILE"
-status
-
-# ================================
-# --- CONFIG ZABBIX SERVER ---
-# ================================
-log "${YELLOW}📦 Configurando o servidor Zabbix...${NC}"
-if [ -f /etc/zabbix/zabbix_server.conf ]; then
-  sed -i "s|^# DBPassword=.*|DBPassword=${ZABBIX_DB_PASS}|" /etc/zabbix/zabbix_server.conf
-  # Se não existir, adiciona
-  grep -q "^DBPassword=" /etc/zabbix/zabbix_server.conf || echo "DBPassword=${ZABBIX_DB_PASS}" >> /etc/zabbix/zabbix_server.conf
   status
+
+  log "${YELLOW}📦 Importando schema inicial...${NC}"
+  zcat /usr/share/zabbix/sql-scripts/mysql/server.sql.gz | \
+    mysql --default-character-set=utf8mb4 -u"${ZABBIX_DB_USER}" -p"${ZABBIX_DB_PASS}" "${ZABBIX_DB_NAME}" &>>"$LOGFILE"
+  mysql -u root -e "SET GLOBAL log_bin_trust_function_creators = 0;" &>>"$LOGFILE"
+  status
+
+  log "${YELLOW}📦 Configurando o servidor Zabbix...${NC}"
+  if [ -f /etc/zabbix/zabbix_server.conf ]; then
+    sed -i "s|^# DBPassword=.*|DBPassword=${ZABBIX_DB_PASS}|" /etc/zabbix/zabbix_server.conf
+    grep -q "^DBPassword=" /etc/zabbix/zabbix_server.conf || echo "DBPassword=${ZABBIX_DB_PASS}" >> /etc/zabbix/zabbix_server.conf
+    status
+  else
+    log "${RED}❌ Falhou (arquivo de conf não encontrado)${NC}\n"
+    exit 1
+  fi
+
+  log "${YELLOW}📦 Configurando idioma PT-BR...${NC}"
+  locale-gen "${LOCALE}" &>>"$LOGFILE"
+  status
+
+  log "${YELLOW}📦 Instalando Grafana...${NC}"
+  apt install -y apt-transport-https software-properties-common wget gpg &>>"$LOGFILE"
+  mkdir -p /etc/apt/keyrings/
+  wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor > /etc/apt/keyrings/grafana.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" > /etc/apt/sources.list.d/grafana.list
+  apt update -qq &>>"$LOGFILE"
+  apt install -y grafana &>>"$LOGFILE"
+  status
+
+  log "${YELLOW}🔁 Ativando e iniciando serviços...${NC}"
+  systemctl restart zabbix-server zabbix-agent apache2 grafana-server &>>"$LOGFILE"
+  systemctl enable zabbix-server zabbix-agent apache2 grafana-server &>>"$LOGFILE"
+  status
+
+# ================================
+# --- INSTALAÇÃO RHEL/CENTOS/ROCKY/ALMA ---
+# ================================
+elif [[ "$DISTRO" == "centos" || "$DISTRO" == "rhel" || "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" ]]; then
+
+  log "${YELLOW}📥 Baixando e configurando repositório do Zabbix...${NC}"
+  rpm -Uvh "https://repo.zabbix.com/zabbix/${ZABBIX_VERSION}/rhel/${VERSAO}/x86_64/zabbix-release-${ZABBIX_VERSION}-1.el${VERSAO}.noarch.rpm" &>>"$LOGFILE"
+  dnf clean all &>>"$LOGFILE" || yum clean all &>>"$LOGFILE"
+  status
+
+  log "${YELLOW}📦 Instalando pacotes Zabbix...${NC}"
+  dnf install -y zabbix-server-mysql zabbix-web-mysql zabbix-apache-conf zabbix-sql-scripts zabbix-agent &>>"$LOGFILE" || \
+  yum install -y zabbix-server-mysql zabbix-web-mysql zabbix-apache-conf zabbix-sql-scripts zabbix-agent &>>"$LOGFILE"
+  status
+
+  log "${YELLOW}📦 Instalando MariaDB Server...${NC}"
+  dnf install -y mariadb-server &>>"$LOGFILE" || yum install -y mariadb-server &>>"$LOGFILE"
+  systemctl enable --now mariadb &>>"$LOGFILE"
+  status
+
+  log "${YELLOW}📦 Criando banco de dados Zabbix...${NC}"
+  mysql -u root <<EOF &>>"$LOGFILE"
+CREATE DATABASE IF NOT EXISTS ${ZABBIX_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+CREATE USER IF NOT EXISTS '${ZABBIX_DB_USER}'@'localhost' IDENTIFIED BY '${ZABBIX_DB_PASS}';
+GRANT ALL PRIVILEGES ON ${ZABBIX_DB_NAME}.* TO '${ZABBIX_DB_USER}'@'localhost';
+SET GLOBAL log_bin_trust_function_creators = 1;
+EOF
+  status
+
+  log "${YELLOW}📦 Importando schema inicial...${NC}"
+  zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | \
+    mysql --default-character-set=utf8mb4 -u"${ZABBIX_DB_USER}" -p"${ZABBIX_DB_PASS}" "${ZABBIX_DB_NAME}" &>>"$LOGFILE"
+  mysql -u root -e "SET GLOBAL log_bin_trust_function_creators = 0;" &>>"$LOGFILE"
+  status
+
+  log "${YELLOW}📦 Configurando o servidor Zabbix...${NC}"
+  if [ -f /etc/zabbix/zabbix_server.conf ]; then
+    sed -i "s|^# DBPassword=.*|DBPassword=${ZABBIX_DB_PASS}|" /etc/zabbix/zabbix_server.conf
+    grep -q "^DBPassword=" /etc/zabbix/zabbix_server.conf || echo "DBPassword=${ZABBIX_DB_PASS}" >> /etc/zabbix/zabbix_server.conf
+    status
+  else
+    log "${RED}❌ Falhou (arquivo de conf não encontrado)${NC}\n"
+    exit 1
+  fi
+
+  log "${YELLOW}📦 Configurando idioma PT-BR...${NC}"
+  localectl set-locale LANG="${LOCALE}" &>>"$LOGFILE"
+  status
+
+  log "${YELLOW}📦 Instalando Grafana...${NC}"
+  cat > /etc/yum.repos.d/grafana.repo << EOF
+[grafana]
+name=grafana
+baseurl=https://packages.grafana.com/oss/rpm
+repo_gpgcheck=1
+enabled=1
+gpgcheck=1
+gpgkey=https://packages.grafana.com/gpg.key
+EOF
+  dnf install -y grafana &>>"$LOGFILE" || yum install -y grafana &>>"$LOGFILE"
+  status
+
+  log "${YELLOW}🔁 Ativando e iniciando serviços...${NC}"
+  systemctl restart zabbix-server zabbix-agent httpd grafana-server &>>"$LOGFILE"
+  systemctl enable zabbix-server zabbix-agent httpd grafana-server &>>"$LOGFILE"
+  status
+
 else
-  log "${RED}❌ Falhou (arquivo de conf não encontrado)${NC}\n"
+  echo -e "${RED}Distribuição não suportada automaticamente!${NC}"
   exit 1
 fi
-
-# ================================
-# --- LOCALE PT-BR ---
-# ================================
-log "${YELLOW}📦 Configurando idioma PT-BR...${NC}"
-locale-gen "${LOCALE}" &>>"$LOGFILE"
-status
-
-# ================================
-# --- INSTALAÇÃO DO GRAFANA ---
-# ================================
-log "${YELLOW}📦 Instalando Grafana...${NC}"
-apt install -y apt-transport-https software-properties-common wget gpg &>>"$LOGFILE"
-mkdir -p /etc/apt/keyrings/
-wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor > /etc/apt/keyrings/grafana.gpg
-echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" > /etc/apt/sources.list.d/grafana.list
-apt update -qq &>>"$LOGFILE"
-apt install -y grafana &>>"$LOGFILE"
-status
-
-# ================================
-# --- ATIVA E INICIA SERVIÇOS ---
-# ================================
-log "${YELLOW}🔁 Ativando e iniciando serviços...${NC}"
-systemctl restart zabbix-server zabbix-agent apache2 grafana-server &>>"$LOGFILE"
-systemctl enable zabbix-server zabbix-agent apache2 grafana-server &>>"$LOGFILE"
-status
 
 # ================================
 # --- VALIDAÇÃO DE PORTAS ABERTAS
