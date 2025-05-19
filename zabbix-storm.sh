@@ -1,8 +1,9 @@
 #!/bin/bash
 
 ##########################################################
-# Instalação Zabbix + Banco + Grafana — Multiplataforma
-# Autor: BUG IT / Fork mnunes182
+# Instalação Zabbix + PostgreSQL + Grafana — Multiplataforma
+# Compatível: Ubuntu, Debian, RHEL, CentOS, Rocky, AlmaLinux
+# Autor: BUG IT / Fork - mnunes182
 ##########################################################
 
 # ================================
@@ -15,6 +16,7 @@ ZABBIX_DB_PASS="${ZABBIX_DB_PASS:-}"  # Pode exportar no shell antes de rodar
 GRAFANA_PORT=3000
 LOCALE="pt_BR.UTF-8"
 LOGFILE="/var/log/instalador_zabbix.log"
+PGSQL_PORT=5432
 
 # ================================
 # --- FUNÇÕES DE CORES E STATUS ---
@@ -85,7 +87,7 @@ cat << "EOF"
  ######   ##  ##   #####    #####     ####    ##  ##             ####      ##      ####    ##  ##   ##   ##
 EOF
 echo -e "${NC}"
-log "${NC}\n:: Iniciando instalação do Zabbix, Banco e Grafana... Aguarde...\n"
+log "${NC}\n:: Iniciando instalação do Zabbix, PostgreSQL e Grafana... Aguarde...\n"
 
 # ================================
 # --- INSTALAÇÃO UBUNTU/DEBIAN ---
@@ -99,27 +101,20 @@ if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
   apt update -qq &>>"$LOGFILE"
   status
 
-  log "${YELLOW}📦 Instalando pacotes Zabbix...${NC}"
-  apt install -y zabbix-server-mysql zabbix-frontend-php zabbix-apache-conf zabbix-sql-scripts zabbix-agent &>>"$LOGFILE"
+  log "${YELLOW}📦 Instalando PostgreSQL, Zabbix e dependências...${NC}"
+  apt install -y postgresql postgresql-contrib zabbix-server-pgsql zabbix-frontend-php php-pgsql zabbix-apache-conf zabbix-sql-scripts zabbix-agent &>>"$LOGFILE"
   status
 
-  log "${YELLOW}📦 Instalando MySQL Server...${NC}"
-  apt install -y mysql-server &>>"$LOGFILE"
+  # Inicializa e garante start do PostgreSQL
+  systemctl enable --now postgresql &>>"$LOGFILE"
+
+  log "${YELLOW}📦 Criando usuário e banco PostgreSQL para o Zabbix...${NC}"
+  sudo -u postgres psql -c "CREATE USER ${ZABBIX_DB_USER} WITH PASSWORD '${ZABBIX_DB_PASS}';" &>>"$LOGFILE"
+  sudo -u postgres psql -c "CREATE DATABASE ${ZABBIX_DB_NAME} OWNER ${ZABBIX_DB_USER} ENCODING 'UTF8' LC_COLLATE='C' LC_CTYPE='C' TEMPLATE=template0;" &>>"$LOGFILE"
   status
 
-  log "${YELLOW}📦 Criando banco de dados Zabbix...${NC}"
-  mysql -u root <<EOF &>>"$LOGFILE"
-CREATE DATABASE IF NOT EXISTS ${ZABBIX_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
-CREATE USER IF NOT EXISTS '${ZABBIX_DB_USER}'@'localhost' IDENTIFIED BY '${ZABBIX_DB_PASS}';
-GRANT ALL PRIVILEGES ON ${ZABBIX_DB_NAME}.* TO '${ZABBIX_DB_USER}'@'localhost';
-SET GLOBAL log_bin_trust_function_creators = 1;
-EOF
-  status
-
-  log "${YELLOW}📦 Importando schema inicial...${NC}"
-  zcat /usr/share/zabbix/sql-scripts/mysql/server.sql.gz | \
-    mysql --default-character-set=utf8mb4 -u"${ZABBIX_DB_USER}" -p"${ZABBIX_DB_PASS}" "${ZABBIX_DB_NAME}" &>>"$LOGFILE"
-  mysql -u root -e "SET GLOBAL log_bin_trust_function_creators = 0;" &>>"$LOGFILE"
+  log "${YELLOW}📦 Importando schema inicial do Zabbix (PostgreSQL)...${NC}"
+  zcat /usr/share/zabbix-sql-scripts/postgresql/server.sql.gz | sudo -u ${ZABBIX_DB_USER} psql ${ZABBIX_DB_NAME} &>>"$LOGFILE"
   status
 
   log "${YELLOW}📦 Configurando o servidor Zabbix...${NC}"
@@ -160,29 +155,28 @@ elif [[ "$DISTRO" == "centos" || "$DISTRO" == "rhel" || "$DISTRO" == "rocky" || 
   dnf clean all &>>"$LOGFILE" || yum clean all &>>"$LOGFILE"
   status
 
-  log "${YELLOW}📦 Instalando pacotes Zabbix...${NC}"
-  dnf install -y zabbix-server-mysql zabbix-web-mysql zabbix-apache-conf zabbix-sql-scripts zabbix-agent &>>"$LOGFILE" || \
-  yum install -y zabbix-server-mysql zabbix-web-mysql zabbix-apache-conf zabbix-sql-scripts zabbix-agent &>>"$LOGFILE"
+  log "${YELLOW}📦 Instalando PostgreSQL, Zabbix e dependências...${NC}"
+  dnf install -y postgresql-server postgresql-contrib zabbix-server-pgsql zabbix-web-pgsql zabbix-apache-conf zabbix-sql-scripts zabbix-agent &>>"$LOGFILE" || \
+  yum install -y postgresql-server postgresql-contrib zabbix-server-pgsql zabbix-web-pgsql zabbix-apache-conf zabbix-sql-scripts zabbix-agent &>>"$LOGFILE"
   status
 
-  log "${YELLOW}📦 Instalando MariaDB Server...${NC}"
-  dnf install -y mariadb-server &>>"$LOGFILE" || yum install -y mariadb-server &>>"$LOGFILE"
-  systemctl enable --now mariadb &>>"$LOGFILE"
+  # Inicializa PostgreSQL (primeira vez)
+  if [ ! -f "/var/lib/pgsql/data/PG_VERSION" ]; then
+    log "${YELLOW}📦 Inicializando cluster do PostgreSQL...${NC}"
+    postgresql-setup --initdb &>>"$LOGFILE"
+    systemctl enable --now postgresql &>>"$LOGFILE"
+    status
+  else
+    systemctl enable --now postgresql &>>"$LOGFILE"
+  fi
+
+  log "${YELLOW}📦 Criando usuário e banco PostgreSQL para o Zabbix...${NC}"
+  sudo -u postgres psql -c "CREATE USER ${ZABBIX_DB_USER} WITH PASSWORD '${ZABBIX_DB_PASS}';" &>>"$LOGFILE"
+  sudo -u postgres psql -c "CREATE DATABASE ${ZABBIX_DB_NAME} OWNER ${ZABBIX_DB_USER} ENCODING 'UTF8' LC_COLLATE='C' LC_CTYPE='C' TEMPLATE=template0;" &>>"$LOGFILE"
   status
 
-  log "${YELLOW}📦 Criando banco de dados Zabbix...${NC}"
-  mysql -u root <<EOF &>>"$LOGFILE"
-CREATE DATABASE IF NOT EXISTS ${ZABBIX_DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
-CREATE USER IF NOT EXISTS '${ZABBIX_DB_USER}'@'localhost' IDENTIFIED BY '${ZABBIX_DB_PASS}';
-GRANT ALL PRIVILEGES ON ${ZABBIX_DB_NAME}.* TO '${ZABBIX_DB_USER}'@'localhost';
-SET GLOBAL log_bin_trust_function_creators = 1;
-EOF
-  status
-
-  log "${YELLOW}📦 Importando schema inicial...${NC}"
-  zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | \
-    mysql --default-character-set=utf8mb4 -u"${ZABBIX_DB_USER}" -p"${ZABBIX_DB_PASS}" "${ZABBIX_DB_NAME}" &>>"$LOGFILE"
-  mysql -u root -e "SET GLOBAL log_bin_trust_function_creators = 0;" &>>"$LOGFILE"
+  log "${YELLOW}📦 Importando schema inicial do Zabbix (PostgreSQL)...${NC}"
+  zcat /usr/share/zabbix-sql-scripts/postgresql/server.sql.gz | sudo -u ${ZABBIX_DB_USER} psql ${ZABBIX_DB_NAME} &>>"$LOGFILE"
   status
 
   log "${YELLOW}📦 Configurando o servidor Zabbix...${NC}"
@@ -226,7 +220,7 @@ fi
 # --- VALIDAÇÃO DE PORTAS ABERTAS
 # ================================
 log "${YELLOW}🔎 Verificando se as portas estão abertas...${NC}"
-for port in 80 $GRAFANA_PORT; do
+for port in 80 $GRAFANA_PORT $PGSQL_PORT; do
   if ss -tuln | grep ":$port " &>/dev/null; then
     log "${GREEN}Porta $port aberta!${NC}"
   else
